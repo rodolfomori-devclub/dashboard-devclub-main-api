@@ -6,7 +6,6 @@ import { config } from '../config.js';
 const router = Router();
 let dmgClient = null;
 
-// Middleware para garantir que o cliente está inicializado
 const ensureInitialized = async (req, res, next) => {
   try {
     if (!dmgClient) {
@@ -24,46 +23,107 @@ const ensureInitialized = async (req, res, next) => {
   }
 };
 
-// Rota para listar transactions
 router.post('/transactions', ensureInitialized, async (req, res) => {
   try {
-    console.log('Recebida requisição com body:', req.body);
+    console.group('🔍 Requisição de Transactions');
+    console.log('Body recebido:', JSON.stringify(req.body, null, 2));
 
-    // Se não houver datas, usa últimos 7 dias como padrão
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setDate(startDate.getDate() - 7);
+    let startDate = req.body.ordered_at_ini 
+      ? new Date(req.body.ordered_at_ini) 
+      : new Date(new Date().setDate(new Date().getDate() - 7));
+    
+    let endDate = req.body.ordered_at_end 
+      ? new Date(req.body.ordered_at_end) 
+      : new Date();
 
-    const filters = {
-      ordered_at_ini: req.body.ordered_at_ini || startDate.toISOString().split('T')[0],
-      ordered_at_end: req.body.ordered_at_end || endDate.toISOString().split('T')[0]
+    startDate.setUTCHours(0, 0, 0, 0);
+    endDate.setUTCHours(23, 59, 59, 999);
+
+    const splitDateRanges = (start, end) => {
+      const ranges = [];
+      let currentStart = new Date(start);
+      let currentEnd = new Date(start);
+    
+      while (currentStart <= end) {
+        currentEnd = new Date(currentStart);
+        currentEnd.setDate(currentStart.getDate() + 179);
+        
+        if (currentEnd > end) {
+          currentEnd = new Date(end);
+        }
+    
+        ranges.push({
+          start: currentStart.toISOString().split('T')[0],
+          end: currentEnd.toISOString().split('T')[0]
+        });
+    
+        currentStart = new Date(currentEnd);
+        currentStart.setDate(currentStart.getDate() + 1);
+      }
+    
+      return ranges;
     };
 
-    console.log('Filtros a serem aplicados:', filters);
+    const dateRanges = splitDateRanges(startDate, endDate);
+    console.log('Períodos divididos:', dateRanges);
 
-    // Busca todas as transações de todas as páginas
-    const response = await dmgClient.getTransactions(filters);
-    
-    // Processa as transações com o serviço de cálculo
-    const processedData = processTransactions(response.data);
+    const allTransactions = [];
+    let totalNetAmount = 0;
+    let totalTransactions = 0;
 
-    // Log dos totais para debug
-    console.log('Totais processados:', {
-      total_transactions: processedData.totals.total_transactions,
-      total_net_amount: processedData.totals.total_net_amount
+    for (const range of dateRanges) {
+      const filters = {
+        ordered_at_ini: range.start,
+        ordered_at_end: range.end
+      };
+
+      console.log('Buscando transações para o período:', filters);
+
+      try {
+        const response = await dmgClient.getTransactions(filters);
+        
+        const processedData = processTransactions(response.data);
+
+        allTransactions.push(...processedData.transactions);
+        totalNetAmount += processedData.totals.total_net_amount;
+        totalTransactions += processedData.totals.total_transactions;
+
+        console.log('Parcial:', {
+          periodStart: range.start,
+          periodEnd: range.end,
+          periodTransactions: processedData.transactions.length,
+          periodNetAmount: processedData.totals.total_net_amount
+        });
+      } catch (periodError) {
+        console.error(`Erro ao buscar período ${range.start} - ${range.end}:`, periodError);
+      }
+    }
+
+    console.log('Totais finais:', {
+      total_transactions: totalTransactions,
+      total_net_amount: totalNetAmount
     });
+
+    console.groupEnd();
 
     res.json({
-      data: processedData.transactions,
-      totals: processedData.totals,
-      total_rows: response.total_rows
+      data: allTransactions,
+      totals: {
+        total_transactions: totalTransactions,
+        total_net_amount: totalNetAmount
+      },
+      total_rows: allTransactions.length
     });
   } catch (error) {
-    console.error('Erro ao buscar transactions:', error);
+    console.error('Erro detalhado ao buscar transactions:', {
+      message: error.message,
+      stack: error.stack,
+      responseData: error.response?.data
+    });
     res.status(500).json({ 
       error: 'Erro ao buscar transactions',
       message: error.message,
-      details: error.response?.data 
+      details: error.response?.data || error.stack
     });
   }
 });
