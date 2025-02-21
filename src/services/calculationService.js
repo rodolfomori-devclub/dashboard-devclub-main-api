@@ -1,96 +1,168 @@
-const FIXED_FEE = 0.44; // Taxa fixa por transação
+// Taxas fixas
+const PROCESSING_FEE = 0.44; // Taxa de processamento
+const TRANSFER_FEE = 3.67; // Taxa de transferência
+const BOLETO_FEE = 2.99; // Taxa de boleto
+const PIX_FEE_PERCENTAGE = 0.0095; // Taxa de Pix (0.95%)
 
-const ANTICIPATION_RATES = {
-  1: 3.34,
-  2: 4.88,
-  3: 5.81,
-  4: 6.74,
-  5: 7.67,
-  6: 8.60,
-  7: 9.53,
-  8: 10.46,
-  9: 11.39,
-  10: 12.32,
-  11: 13.25,
-  12: 14.18
+// Taxa de antecipação
+const ANTICIPATION_RATE = 0.019; // 1.90% por parcela
+
+// Taxas de cartão de crédito
+const CREDIT_CARD_RATES = {
+  'visa': { '1': 0.0160, '2-6': 0.0211, '7-12': 0.0211 },
+  'mastercard': { '1': 0.0160, '2-6': 0.0211, '7-12': 0.0211 },
+  'elo': { '1': 0.0160, '2-6': 0.0211, '7-12': 0.0211 },
+  'amex': { '1': 0.0160, '2-6': 0.0211, '7-12': 0.0211 },
+  'hipercard': { '1': 0.0160, '2-6': 0.0211, '7-12': 0.0211 }
 };
 
-export const calculateNetAmount = (transaction) => {
-  try {
-    // Se for cartão de crédito, calcula o valor líquido com as taxas
-    if (transaction.payment?.method === 'credit_card') {
-      const total = transaction.payment.total;
-      const grossAmount = transaction.payment.gross;
-      const marketplaceValue = transaction.payment.marketplace_value;
-      const installments = transaction.payment.installments.qty;
+const getCardRate = (brand, installments) => {
+  if (!brand) {
+    console.warn('Bandeira do cartão não fornecida, usando taxa padrão.');
+    return CREDIT_CARD_RATES['visa']['7-12']; // Taxa padrão
+  }
 
-      // Calcula taxa de antecipação usando o valor gross
-      const anticipationRate = ANTICIPATION_RATES[installments] || ANTICIPATION_RATES[12];
-      const anticipationValue = (grossAmount * anticipationRate) / 100;
+  const rates = CREDIT_CARD_RATES[brand.toLowerCase()];
+  if (!rates) {
+    console.warn(`Bandeira ${brand} não reconhecida, usando taxa padrão.`);
+    return CREDIT_CARD_RATES['visa']['7-12']; // Taxa padrão
+  }
 
-      // Calcula valor líquido subtraindo todas as taxas do valor total
-      const netAmount = total - marketplaceValue - FIXED_FEE - anticipationValue;
+  if (installments === 1) return rates['1'];
+  if (installments >= 2 && installments <= 6) return rates['2-6'];
+  return rates['7-12'];
+};
 
-      return {
-        ...transaction,
-        calculation_details: {
-          base_total: total,
-          gross_amount: grossAmount,
-          discounts: {
-            marketplace_fee: marketplaceValue,
-            fixed_fee: FIXED_FEE,
-            anticipation_fee: anticipationValue,
-            anticipation_rate: anticipationRate
-          },
-          net_amount: netAmount,
-          installments
-        }
-      };
+const calculateNetAffiliateValue = (affiliateValue) => {
+  if (!affiliateValue) return 0;
+
+  // Aplicar as mesmas taxas que aplicamos ao valor de venda
+  const grossAmount = affiliateValue;
+  const mdrFee = grossAmount * CREDIT_CARD_RATES['visa']['7-12']; // Usando a taxa padrão
+  const anticipationFee = (grossAmount - mdrFee) * ANTICIPATION_RATE;
+  
+  let netAmount = grossAmount - mdrFee - anticipationFee - PROCESSING_FEE - TRANSFER_FEE;
+  
+  return Math.max(netAmount, 0); // Garantir que o valor não seja negativo
+};
+
+const calculateNetAmount = (transaction) => {
+  const { payment } = transaction;
+  let netAmount = 0;
+  let discounts = {};
+  let grossAffiliateValue = payment.affiliate_value || 0;
+  let netAffiliateValue = calculateNetAffiliateValue(grossAffiliateValue);
+
+  if (!payment) {
+    console.error('Dados de pagamento não encontrados na transação:', transaction);
+    return transaction;
+  }
+
+  const totalAmount = payment.total || 0;
+
+  if (payment.method === 'credit_card') {
+    const installments = payment.installments?.qty || 1;
+    const cardRate = getCardRate(payment.credit_card?.brand, installments);
+    
+    // Calcula o valor bruto (após dedução da taxa MDR)
+    const grossAmount = totalAmount * (1 - cardRate);
+    
+    // Calcula o valor líquido por parcela
+    const installmentGrossAmount = grossAmount / installments;
+    
+    let totalNetAmount = 0;
+    for (let i = 1; i <= installments; i++) {
+      const daysToAnticipate = 30 * i;
+      const anticipationFee = installmentGrossAmount * ANTICIPATION_RATE * (daysToAnticipate / 30);
+      const installmentNetAmount = installmentGrossAmount - anticipationFee;
+      totalNetAmount += installmentNetAmount;
     }
 
-    // Para outros métodos de pagamento, usa o net direto da transação
-    return {
-      ...transaction,
-      calculation_details: {
-        net_amount: transaction.payment.net
-      }
+    netAmount = totalNetAmount - PROCESSING_FEE - TRANSFER_FEE;
+
+    discounts = {
+      mdr_fee: totalAmount * cardRate,
+      anticipation_fee: grossAmount - totalNetAmount,
+      processing_fee: PROCESSING_FEE,
+      transfer_fee: TRANSFER_FEE
     };
-  } catch (error) {
-    console.error('Erro ao calcular valor líquido:', error);
-    throw new Error('Erro ao calcular valor líquido: ' + error.message);
+  } else if (payment.method === 'boleto') {
+    netAmount = totalAmount - BOLETO_FEE - PROCESSING_FEE - TRANSFER_FEE;
+    discounts = {
+      boleto_fee: BOLETO_FEE,
+      processing_fee: PROCESSING_FEE,
+      transfer_fee: TRANSFER_FEE
+    };
+  } else if (payment.method === 'pix') {
+    const pixFee = totalAmount * PIX_FEE_PERCENTAGE;
+    netAmount = totalAmount - pixFee - PROCESSING_FEE - TRANSFER_FEE;
+    discounts = {
+      pix_fee: pixFee,
+      processing_fee: PROCESSING_FEE,
+      transfer_fee: TRANSFER_FEE
+    };
+  } else {
+    // Para outros métodos de pagamento, use o net fornecido pela API
+    netAmount = payment.net || totalAmount;
+    discounts = {
+      processing_fee: PROCESSING_FEE,
+      transfer_fee: TRANSFER_FEE
+    };
   }
+
+  // Subtrair o valor líquido da afiliação do valor líquido total
+  netAmount -= netAffiliateValue;
+
+  return {
+    ...transaction,
+    calculation_details: {
+      payment_method: payment.method,
+      total_amount: totalAmount,
+      net_amount: netAmount,
+      discounts: discounts,
+      gross_affiliate_value: grossAffiliateValue,
+      net_affiliate_value: netAffiliateValue
+    }
+  };
 };
 
 export const processTransactions = (transactions) => {
   try {
-    // Processa array de transações
-    const processedTransactions = transactions.map(transaction => 
-      calculateNetAmount(transaction)
-    );
+    const processedTransactions = transactions.map(transaction => {
+      try {
+        return calculateNetAmount(transaction);
+      } catch (error) {
+        console.error('Erro ao processar transação:', error, transaction);
+        return transaction;
+      }
+    });
 
-    // Calcula totais
     const totals = processedTransactions.reduce((acc, transaction) => {
+      const details = transaction.calculation_details;
       acc.total_transactions += 1;
-      acc.total_net_amount += transaction.calculation_details.net_amount;
-
-      // Adiciona informações de taxas apenas para cartão de crédito
-      if (transaction.payment?.method === 'credit_card') {
-        acc.total_marketplace_fees += transaction.calculation_details.discounts.marketplace_fee;
-        acc.total_anticipation_fees += transaction.calculation_details.discounts.anticipation_fee;
-        acc.total_fixed_fees += FIXED_FEE;
+      acc.total_net_amount += details?.net_amount || 0;
+      acc.total_net_affiliate_value += details?.net_affiliate_value || 0;
+      
+      if (details?.discounts) {
+        Object.entries(details.discounts).forEach(([key, value]) => {
+          acc[`total_${key}`] = (acc[`total_${key}`] || 0) + value;
+        });
       }
 
       return acc;
     }, {
       total_transactions: 0,
       total_net_amount: 0,
-      total_marketplace_fees: 0,
-      total_anticipation_fees: 0,
-      total_fixed_fees: 0
+      total_net_affiliate_value: 0
     });
 
+    console.log('Totais calculados:', totals);
+
     return {
-      transactions: processedTransactions,
+      transactions: processedTransactions.map(t => ({
+        ...t,
+        net_affiliate_value: t.calculation_details.net_affiliate_value
+      })),
       totals
     };
   } catch (error) {

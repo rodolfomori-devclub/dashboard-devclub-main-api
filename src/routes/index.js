@@ -83,6 +83,7 @@ router.post('/transactions', ensureInitialized, async (req, res) => {
         const response = await dmgClient.getTransactions(filters);
         
         const processedData = processTransactions(response.data);
+console.log('Amostra de transação processada:', processedData.transactions[0]);
 
         allTransactions.push(...processedData.transactions);
         totalNetAmount += processedData.totals.total_net_amount;
