@@ -7,6 +7,12 @@ const app = express();
 
 // Middlewares
 app.use(cors());
+app.use(cors({
+  origin: '*',  // Permite qualquer origem (temporário)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
 app.use(express.json());
 
 // Rotas

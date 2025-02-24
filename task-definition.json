@@ -1,0 +1,23 @@
+{
+  "family": "dash-api-task",
+  "networkMode": "awsvpc",
+  "executionRoleArn": "arn:aws:iam::833785284503:role/ecsTaskExecutionRole",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "256",
+  "memory": "512",
+  "containerDefinitions": [
+    {
+      "name": "dash-api",
+      "image": "833785284503.dkr.ecr.us-east-1.amazonaws.com/dash-api-v1:latest",
+      "memory": 512,
+      "cpu": 256,
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "hostPort": 3000
+        }
+      ]
+    }
+  ]
+}
