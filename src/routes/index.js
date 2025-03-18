@@ -139,13 +139,34 @@ router.post('/refunds', ensureInitialized, async (req, res) => {
     // Importar o serviço de cálculo para processar os reembolsos
     const { processTransactions } = await import('../services/calculationService.js');
 
-    let startDate = req.body.ordered_at_ini 
-      ? new Date(req.body.ordered_at_ini) 
-      : new Date(new Date().setDate(new Date().getDate() - 7));
+    // Verificar diferentes possíveis nomes de parâmetros para datas
+    // Isso permite flexibilidade na forma como o frontend envia as datas
+    let startDate = null;
+    if (req.body.cancelled_at_ini) {
+      startDate = new Date(req.body.cancelled_at_ini);
+    } else if (req.body.ordered_at_ini) {
+      startDate = new Date(req.body.ordered_at_ini);
+    } else if (req.body.start_date) {
+      startDate = new Date(req.body.start_date);
+    } else {
+      startDate = new Date(new Date().setDate(new Date().getDate() - 7));
+    }
     
-    let endDate = req.body.ordered_at_end 
-      ? new Date(req.body.ordered_at_end) 
-      : new Date();
+    let endDate = null;
+    if (req.body.cancelled_at_end) {
+      endDate = new Date(req.body.cancelled_at_end);
+    } else if (req.body.ordered_at_end) {
+      endDate = new Date(req.body.ordered_at_end);
+    } else if (req.body.end_date) {
+      endDate = new Date(req.body.end_date);
+    } else {
+      endDate = new Date();
+    }
+
+    console.log('Datas de filtro selecionadas:', {
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString()
+    });
 
     startDate.setUTCHours(0, 0, 0, 0);
     endDate.setUTCHours(23, 59, 59, 999);
@@ -183,9 +204,10 @@ router.post('/refunds', ensureInitialized, async (req, res) => {
     let totalRefunds = 0;
 
     for (const range of dateRanges) {
+      // Use os nomes de parâmetros que a API DMG espera para reembolsos
       const filters = {
-        ordered_at_ini: range.start,
-        ordered_at_end: range.end
+        cancelled_at_ini: range.start,
+        cancelled_at_end: range.end
       };
 
       console.log('Buscando reembolsos para o período:', filters);
@@ -203,8 +225,8 @@ router.post('/refunds', ensureInitialized, async (req, res) => {
         console.log('Parcial de reembolsos:', {
           periodStart: range.start,
           periodEnd: range.end,
-          periodRefunds: refundsData.length,
-          periodRefundAmount: refundsData.reduce((sum, refund) => sum + refund.refund_amount, 0)
+          periodRefunds: processedRefunds.transactions.length,
+          periodRefundAmount: processedRefunds.totals.total_net_amount
         });
 
       } catch (periodError) {

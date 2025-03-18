@@ -22,6 +22,7 @@ export class DMGClient {
 
     console.log('Cliente DMG inicializado com sucesso');
   }
+  
   async getRefundedTransactions(filters = {}) {
     try {
       this.ensureInitialized();
@@ -32,12 +33,15 @@ export class DMGClient {
       let hasMore = true;
   
       console.log('Iniciando busca de transações reembolsadas com filtros:', filters);
+      
+      // Status de reembolsos a serem buscados
+      const refundStatuses = ['refunded', 'chargeback', 'dispute', 'rejected'];
   
       // Primeira chamada para obter o total de registros
       const firstResponse = await this.client.get('/transactions', { 
         params: {
           ...filters,
-          'transaction_status[]': 'refunded'
+          'transaction_status[]': refundStatuses,
         }
       });
   
@@ -68,7 +72,7 @@ export class DMGClient {
         const response = await this.client.get('/transactions', {
           params: {
             ...filters,
-            'transaction_status[]': 'refunded',
+            'transaction_status[]': refundStatuses,
             cursor: nextCursor
           }
         });
@@ -125,7 +129,7 @@ export class DMGClient {
       const allTransactions = [];
       let nextCursor = null;
       let totalRows = null;
-      let hasMore = true;  // Mudado para let
+      let hasMore = true;
 
       console.log('Iniciando busca de transações com filtros:', filters);
 
